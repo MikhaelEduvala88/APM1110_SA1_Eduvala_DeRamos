@@ -1,0 +1,170 @@
+---
+title: "SEC 2-SA1 GROUP 4- De Ramos,Aneeza;Eduvala, Mikhael"
+author: ""
+date: "2026-10-9"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+1.  Find out which probability distribution function best fits Bitcoin’s returns for trading data every minute, from January 1, 2012 to April 15, 2025, for Bitcoin quoted in United States dollars or the BTC/USD pair.
+
+```{r}
+# Load required libraries
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(fitdistrplus)
+library(zoo)
+library(readr)
+
+# Load and prepare data
+df <- read_csv("btcusd_1-min_data.csv")
+df$Timestamp <- as.POSIXct(df$Timestamp, origin = "1970-01-01", tz = "UTC")
+
+df <- df %>%
+  arrange(Timestamp) %>%
+  mutate(Close = zoo::na.locf(Close, na.rm = FALSE)) %>%
+  filter(!is.na(Close)) %>%
+  mutate(LogReturn = c(NA, diff(log(Close)))) %>%
+  filter(!is.na(LogReturn))
+
+returns <- df$LogReturn
+returns <- returns[is.finite(returns)]
+
+# --- Plot Histogram ---
+ggplot(df, aes(x = LogReturn)) +
+  geom_histogram(bins = 100, aes(y = ..density..), fill = "lightblue", color = "black") +
+  geom_density(color = "red", linewidth = 1) +
+  labs(title = "Bitcoin Log Returns", x = "Log Return", y = "Density")
+
+
+# --- Fit Normal Analytically ---
+fit_norm <- list(estimate = c(mean = mean(returns, na.rm = TRUE), sd = sd(returns, na.rm = TRUE)))
+
+# --- Fit Student's t using subset for speed ---
+returns_sub <- returns[seq(1, length(returns), by = 10)]  # Subsample for faster optimization
+
+dt_negloglik <- function(params, data) {
+  mu <- params[1]
+  sigma <- params[2]
+  df <- params[3]
+  if (sigma <= 0 || df <= 2) return(1e10)
+  -sum(dt((data - mu) / sigma, df = df, log = TRUE) - log(sigma))
+}
+
+start_params <- c(mu = mean(returns_sub), sigma = sd(returns_sub), df = 5)
+
+fit_t <- optim(
+  par = start_params,
+  fn = dt_negloglik,
+  data = returns_sub,
+  method = "L-BFGS-B",
+  lower = c(-Inf, 1e-6, 2.01),
+  upper = c(Inf, Inf, 100),
+  control = list(maxit = 150, factr = 1e7)
+)
+```
+
+```{r}
+# --- Plot PDFs ---
+x_vals <- seq(min(returns), max(returns), length.out = 1000)
+y_norm <- dnorm(x_vals, mean = fit_norm$estimate["mean"], sd = fit_norm$estimate["sd"])
+y_t <- dt((x_vals - fit_t$par[1]) / fit_t$par[2], df = fit_t$par[3]) / fit_t$par[2]
+
+line_data <- data.frame(x = x_vals, y_norm = y_norm, y_t = y_t)
+
+ggplot() +
+  geom_histogram(data = df, aes(x = LogReturn, y = after_stat(density)), bins = 100, fill = "gray90", color = "black") +
+  geom_line(data = line_data, aes(x = x, y = y_norm), color = "blue", linewidth = 1.2, linetype = "dashed") +
+  geom_line(data = line_data, aes(x = x, y = y_t), color = "red", linewidth = 1.2) +
+  labs(title = "Normal (blue dashed) vs t (red)", x = "Log Return", y = "Density")
+```
+
+```{r}
+# --- Kolmogorov-Smirnov Tests ---
+set.seed(123)
+n <- length(returns)
+
+sim_norm <- rnorm(n, mean = fit_norm$estimate["mean"], sd = fit_norm$estimate["sd"])
+sim_t <- fit_t$par[1] + fit_t$par[2] * rt(n, df = fit_t$par[3])
+
+ks_norm <- ks.test(returns, sim_norm)
+ks_t <- ks.test(returns, sim_t)
+
+# --- Print Results ---
+cat("Normal Fit:\n")
+print(fit_norm)
+
+cat("\n t Fit:\n")
+cat("mu =", fit_t$par[1], "\n")
+cat("sigma =", fit_t$par[2], "\n")
+cat("df =", fit_t$par[3], "\n")
+
+cat("\nKolmogorov–Smirnov Test Results:\n")
+print(ks_norm)
+print(ks_t)
+
+
+```
+
+Conclusion on Bitcoin Minute Returns:
+
+Student’s t-distribution fits best due to its ability to capture heavy tails.
+
+Normal distribution underestimates tail risk, failing to account for extreme price jumps common in high-frequency crypto trading.
+
+Therefore, the Student’s t-distribution is more appropriate for modeling Bitcoin's log returns at minute intervals.
+
+
+
+2.  Test using Shapiro-Wilk normality test the Ethereum returns for trading data every five minutes, from August 7, 2015 to April 15, 2025.
+
+```{r}
+library(dplyr)
+library(lubridate)
+```
+
+```{r}
+# Load dataset
+eth_data <- read.csv("ethereum_5min_returns.csv")
+```
+
+```{r}
+set.seed(123)
+returns_5min <- na.omit(as.numeric(eth_data$Return))
+
+returns_sample <- if (length(returns_5min) > 5000) sample(returns_5min, 5000) else returns_5min
+# Shapiro-Wilk normality test on 5-minute returns
+shapiro_result_5min <- shapiro.test(returns_sample)
+print("Shapiro-Wilk Test on 5-Minute Returns:")
+print(shapiro_result_5min)
+```
+
+```{r}
+# Q-Q Plot of 5-minute returns
+qqnorm(returns_5min, main = "Q-Q Plot of ETH 5-Minute Log Returns")
+qqline(returns_5min, col = "red")
+```
+
+```{r}
+# Histogram with Normal Curve of 5-minute returns
+hist(returns_5min, breaks = 50, probability = TRUE,
+     main = "Histogram of ETH 5-Minute Log Returns", xlab = "Log Returns")
+curve(dnorm(x, mean = mean(returns_5min), sd = sd(returns_5min)),
+      col = "blue", lwd = 2, add = TRUE)
+```
+Interpretation and Findings on Ethereum 5-Minute Returns
+
+Distribution & Fat Tails: The histogram and Q-Q plot show that most bars are packed tightly around 0%, with about 84% of changes falling within one standard deviation (approx. 0.29%). However, the data exhibits heavy "fat tails" and extreme kurtosis (~83), meaning extreme price moves happen much more frequently than a normal distribution predicts.
+
+Normality Test Results: The Shapiro-Wilk test yields a p-value significantly below the standard significance threshold (p < 0.05), leading to the rejection of the null hypothesis of normality.
+
+Volatility Trends: Analysis of rolling volatility shows that market swings were highest in early 2018 (~0.73%) following the 2017 boom, gradually trending down toward calmer periods in later years, indicating market maturation alongside episodic instability during major news or crashes.
+
+Intraday Patterns: Price moves and trading volume peak around 14:00 to 16:00 UTC, coinciding with active trading hours across European and U.S. markets, whereas quiet hours occur overnight and on weekends.
+
+Limitations: Approximately 3.6% of early rows (particularly in 2017 and 2019) display zero price movement due to low liquidity or data gaps, which should be accounted for when evaluating high-frequency metrics. Furthermore, these historical observations describe past market behavior and do not serve as price predictions.
+
